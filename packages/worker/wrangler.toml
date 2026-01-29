@@ -1,0 +1,74 @@
+# OpenCode Relay Worker Configuration
+# Copy this file and customize for your deployment
+
+name = "opencode-relay"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# =============================================================================
+# IMPORTANT: Update these values for your deployment
+# =============================================================================
+
+# Your Cloudflare Account ID (required)
+# account_id = "your-account-id"
+
+# =============================================================================
+# Durable Objects Configuration
+# =============================================================================
+
+[durable_objects]
+bindings = [
+  { name = "CONTAINER_MANAGER", class_name = "ContainerManager" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ContainerManager"]
+
+# =============================================================================
+# R2 Bucket for Persistent Storage
+# =============================================================================
+
+[[r2_buckets]]
+binding = "OPENCODE_STATE"
+bucket_name = "opencode-state"
+# preview_bucket_name = "opencode-state-preview"  # For local dev
+
+# =============================================================================
+# Container Configuration
+# =============================================================================
+
+# NOTE: Cloudflare Containers are in beta. You may need to request access.
+# See: https://developers.cloudflare.com/containers/
+
+# Uncomment and configure once containers are enabled:
+# [[containers]]
+# class_name = "ContainerManager"
+# image = "./container"  # or registry URL
+# max_instances = 10
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+
+[vars]
+# Idle timeout before container sleeps (in minutes)
+IDLE_TIMEOUT_MINUTES = "30"
+
+# Container instance type: lite, basic, standard-1, standard-2, standard-3, standard-4
+CONTAINER_INSTANCE_TYPE = "basic"
+
+# =============================================================================
+# Secrets (set via wrangler secret put)
+# =============================================================================
+# AUTH_SECRET - shared secret for VPS authentication (optional)
+# Run: wrangler secret put AUTH_SECRET
+
+# =============================================================================
+# Development
+# =============================================================================
+
+# [env.dev]
+# name = "opencode-relay-dev"
+# vars = { IDLE_TIMEOUT_MINUTES = "5" }

@@ -1,0 +1,49 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+build/
+*.exe
+/ssh-relay
+packages/ssh-relay/ssh-relay
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local data
+*.db
+*.sqlite
+keys.db
+
+# SSH keys (don't commit these!)
+host_key
+host_key.pub
+*.pem
+id_*
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# Go
+*.test
+coverage.out

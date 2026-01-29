@@ -1,0 +1,37 @@
+# SSH Relay systemd service
+# Copy to /etc/systemd/system/ssh-relay.service
+# Then: systemctl enable ssh-relay && systemctl start ssh-relay
+
+[Unit]
+Description=SSH OpenCode Relay Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Binary location (adjust as needed)
+ExecStart=/usr/local/bin/ssh-relay
+
+# Environment file
+EnvironmentFile=-/etc/ssh-opencode/ssh-relay.env
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Security
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ssh-opencode /etc/ssh-opencode
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ssh-relay
+
+[Install]
+WantedBy=multi-user.target

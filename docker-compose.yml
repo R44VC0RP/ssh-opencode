@@ -1,0 +1,41 @@
+# Docker Compose for local development
+# This is primarily for testing the SSH relay locally
+# The Cloudflare Worker must be deployed separately
+
+version: '3.8'
+
+services:
+  ssh-relay:
+    build:
+      context: ./packages/ssh-relay
+      dockerfile: Dockerfile
+    ports:
+      - "2222:22"  # Use 2222 to avoid conflict with host SSH
+    environment:
+      - WORKER_URL=${WORKER_URL}
+      - AUTH_SECRET=${AUTH_SECRET:-}
+      - AUTO_REGISTER=true
+    volumes:
+      - ssh-relay-keys:/etc/ssh-opencode
+      - ssh-relay-db:/var/lib/ssh-opencode
+    restart: unless-stopped
+
+  # For local container testing (simulates the CF container)
+  container:
+    build:
+      context: ./packages/container
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PTY_BRIDGE_PORT=8080
+    volumes:
+      - container-data:/data
+    restart: unless-stopped
+    profiles:
+      - local-test
+
+volumes:
+  ssh-relay-keys:
+  ssh-relay-db:
+  container-data:
