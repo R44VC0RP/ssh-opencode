@@ -17,13 +17,12 @@ FROM ghcr.io/anomalyco/opencode:latest
 # Switch to root for setup
 USER root
 
-# Install additional dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install additional dependencies (Alpine uses apk)
+RUN apk add --no-cache \
     ca-certificates \
     git \
     openssh-client \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl
 
 # Copy PTY bridge binary
 COPY --from=builder /build/pty-bridge /usr/local/bin/pty-bridge
@@ -47,3 +46,7 @@ EXPOSE 8080
 
 # Run entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Version label to force new image digest
+LABEL version="2026.01.29.v5" \
+      description="PTY bridge with HTTP buffer + WebSocket streaming"

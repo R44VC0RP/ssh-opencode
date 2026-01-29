@@ -1,16 +1,74 @@
 # Docker Compose for local development
-# This is primarily for testing the SSH relay locally
-# The Cloudflare Worker must be deployed separately
-
-version: '3.8'
+# 
+# Usage:
+#   Local testing (no CF): docker compose up
+#   CF testing:            docker compose --profile cf up ssh-relay-cf
+#
+# The default profile runs everything locally (ssh-relay → local-proxy → container)
+# The 'cf' profile runs ssh-relay pointing to your deployed CF worker
 
 services:
+  # ==========================================================================
+  # LOCAL TESTING (default) - full local stack
+  # ==========================================================================
+  
+  # Container running OpenCode with PTY bridge (simulates CF Container)
+  container:
+    build:
+      context: ./packages/container
+      dockerfile: Dockerfile
+    environment:
+      - PTY_BRIDGE_PORT=8080
+    volumes:
+      - container-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Local WebSocket proxy (simulates CF Worker)
+  local-proxy:
+    build:
+      context: ./packages/local-proxy
+      dockerfile: Dockerfile
+    environment:
+      - PROXY_PORT=8081
+      - CONTAINER_URL=http://container:8080
+    depends_on:
+      container:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # SSH relay server (local mode - connects to local-proxy)
   ssh-relay:
     build:
       context: ./packages/ssh-relay
       dockerfile: Dockerfile
     ports:
-      - "2222:22"  # Use 2222 to avoid conflict with host SSH
+      - "2222:22"
+    environment:
+      - WORKER_URL=ws://local-proxy:8081/ws
+      - AUTO_REGISTER=true
+    volumes:
+      - ssh-relay-keys:/etc/ssh-opencode
+      - ssh-relay-db:/var/lib/ssh-opencode
+    depends_on:
+      - local-proxy
+    restart: unless-stopped
+
+  # ==========================================================================
+  # CF TESTING (--profile cf) - connects to real Cloudflare worker
+  # ==========================================================================
+  
+  # SSH relay server (CF mode - connects to deployed CF worker)
+  ssh-relay-cf:
+    build:
+      context: ./packages/ssh-relay
+      dockerfile: Dockerfile
+    ports:
+      - "2222:22"
     environment:
       - WORKER_URL=${WORKER_URL}
       - AUTH_SECRET=${AUTH_SECRET:-}
@@ -19,21 +77,8 @@ services:
       - ssh-relay-keys:/etc/ssh-opencode
       - ssh-relay-db:/var/lib/ssh-opencode
     restart: unless-stopped
-
-  # For local container testing (simulates the CF container)
-  container:
-    build:
-      context: ./packages/container
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-    environment:
-      - PTY_BRIDGE_PORT=8080
-    volumes:
-      - container-data:/data
-    restart: unless-stopped
     profiles:
-      - local-test
+      - cf
 
 volumes:
   ssh-relay-keys:

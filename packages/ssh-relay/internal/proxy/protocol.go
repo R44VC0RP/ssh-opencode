@@ -13,6 +13,7 @@ const (
 	MsgPing   MessageType = "ping"
 	MsgPong   MessageType = "pong"
 	MsgError  MessageType = "error"
+	MsgStatus MessageType = "status"
 )
 
 // Message is the base message structure
@@ -28,8 +29,9 @@ type Message struct {
 	Code int `json:"code,omitempty"`
 	// For ping/pong
 	Timestamp int64 `json:"timestamp,omitempty"`
-	// For error
-	Error string `json:"error,omitempty"`
+	// For error and status
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // NewInitMessage creates an init message

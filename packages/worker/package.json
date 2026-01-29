@@ -8,9 +8,12 @@
     "tail": "wrangler tail",
     "types": "wrangler types"
   },
+  "dependencies": {
+    "@cloudflare/containers": "^0.1.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241205.0",
     "typescript": "^5.7.2",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.61.1"
   }
 }

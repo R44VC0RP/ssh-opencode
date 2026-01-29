@@ -187,6 +187,11 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 					log.Printf("Session %s: error: %s", fingerprint[:16], msg.Error)
 					io.WriteString(s, fmt.Sprintf("Error: %s\r\n", msg.Error))
 
+				case proxy.MsgStatus:
+					// Display status message to user
+					log.Printf("Session %s: status: %s", fingerprint[:16], msg.Message)
+					io.WriteString(s, fmt.Sprintf("\r%s\r\n", msg.Message))
+
 				case proxy.MsgPong:
 					// Connection is alive, nothing to do
 				}

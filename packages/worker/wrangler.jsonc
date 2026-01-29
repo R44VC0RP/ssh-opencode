@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "opencode-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // Container configuration
+  "containers": [
+    {
+      "class_name": "ContainerManager",
+      "image": "../container/Dockerfile",
+      "max_instances": 10,
+      "instance_type": "basic"
+    }
+  ],
+
+  // Durable Objects configuration
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CONTAINER_MANAGER",
+        "class_name": "ContainerManager"
+      }
+    ]
+  },
+
+  // Migrations - must use new_sqlite_classes for containers
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ContainerManager"]
+    }
+  ],
+
+  // R2 bucket for persistent storage
+  "r2_buckets": [
+    {
+      "binding": "OPENCODE_STATE",
+      "bucket_name": "opencode-state"
+    }
+  ],
+
+  // Environment variables
+  "vars": {
+    "IDLE_TIMEOUT_MINUTES": "30",
+    "CONTAINER_INSTANCE_TYPE": "basic"
+  }
+}
