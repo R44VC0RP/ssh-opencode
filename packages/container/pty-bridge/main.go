@@ -138,6 +138,7 @@ func main() {
 	http.HandleFunc("/read", handleRead)
 	http.HandleFunc("/resize", handleResize)
 	http.HandleFunc("/status", handleStatus)
+	http.HandleFunc("/writeread", handleWriteRead) // Combined write+read for low latency
 
 	// WebSocket endpoint for streaming (future use)
 	http.HandleFunc("/ws", handleWebSocket)
@@ -510,6 +511,89 @@ func handleRead(w http.ResponseWriter, r *http.Request) {
 	// Write newline-delimited JSON
 	for _, msg := range messages {
 		jsonData, _ := json.Marshal(msg)
+		w.Write(jsonData)
+		w.Write([]byte("\n"))
+	}
+}
+
+// handleWriteRead combines write and read in a single request for lower latency
+// Writes to PTY, waits briefly for output, then returns any available data
+func handleWriteRead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if session == nil || !session.isRunning {
+		sendError(w, "Session not initialized or not running")
+		return
+	}
+
+	var msg Message
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		sendError(w, "Failed to parse message: "+err.Error())
+		return
+	}
+
+	// Handle write
+	switch msg.Type {
+	case MsgData:
+		data, err := base64.StdEncoding.DecodeString(msg.Data)
+		if err != nil {
+			sendError(w, "Failed to decode data: "+err.Error())
+			return
+		}
+
+		session.mu.Lock()
+		_, err = session.ptmx.Write(data)
+		session.mu.Unlock()
+
+		if err != nil {
+			sendError(w, "Failed to write to PTY: "+err.Error())
+			return
+		}
+
+	case MsgResize:
+		session.mu.Lock()
+		setWinsize(session.ptmx, msg.Cols, msg.Rows)
+		session.mu.Unlock()
+
+	default:
+		sendError(w, "Unknown message type: "+string(msg.Type))
+		return
+	}
+
+	// No sleep - read whatever is immediately available
+	// The PTY output goes to buffer asynchronously via readPTYOutput goroutine
+
+	// Read available output
+	w.Header().Set("Content-Type", "application/json")
+
+	session.mu.RLock()
+	isRunning := session.isRunning
+	exitCode := session.exitCode
+	session.mu.RUnlock()
+
+	data := session.output.Read()
+
+	var messages []Message
+
+	if len(data) > 0 {
+		messages = append(messages, Message{
+			Type: MsgData,
+			Data: base64.StdEncoding.EncodeToString(data),
+		})
+	}
+
+	if !isRunning {
+		messages = append(messages, Message{
+			Type: MsgExit,
+			Code: exitCode,
+		})
+	}
+
+	for _, m := range messages {
+		jsonData, _ := json.Marshal(m)
 		w.Write(jsonData)
 		w.Write([]byte("\n"))
 	}

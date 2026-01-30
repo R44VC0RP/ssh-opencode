@@ -79,11 +79,12 @@ func main() {
 	log.Printf("Key registry initialized with %d keys", count)
 
 	// Session configuration
-	// Reduced ping interval to 1s for more responsive output when not using WebSocket streaming
+	// Fast ping interval (100ms) for responsive output polling
+	// This triggers reads from the container on each ping
 	sessionCfg := session.Config{
 		WorkerURL:    *workerURL,
 		AuthSecret:   *authSecret,
-		PingInterval: 1 * time.Second,
+		PingInterval: 100 * time.Millisecond,
 	}
 
 	// Create SSH server

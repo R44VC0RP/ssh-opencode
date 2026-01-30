@@ -186,7 +186,6 @@ export class ContainerManager extends Container {
   }
 
   private async sendToContainer(msg: Message): Promise<void> {
-    console.log('[Write] Sending type:', msg.type, 'data length:', getDataLength(msg));
     try {
       const response = await this.containerFetch('http://container:8080/write', {
         method: 'POST',
@@ -195,54 +194,68 @@ export class ContainerManager extends Container {
       });
       if (!response.ok) {
         console.error('[Write] Failed:', response.status);
-      } else {
-        console.log('[Write] OK');
       }
     } catch (err) {
       console.error('[Write] Error:', err);
     }
   }
 
+  // Combined write + read for lower latency (single HTTP round-trip)
+  private async writeAndRead(msg: Message): Promise<void> {
+    try {
+      const response = await this.containerFetch('http://container:8080/writeread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (response.ok) {
+        const text = await response.text();
+        if (text.trim()) {
+          const lines = text.split('\n').filter((l: string) => l.trim());
+          for (const line of lines) {
+            const parsed = parseMessage(line);
+            if (parsed) {
+              this.broadcastToWebSockets(parsed);
+              if (parsed.type === 'exit') {
+                console.log('[WriteRead] PTY exited with code:', parsed.code);
+              }
+            }
+          }
+        }
+      } else {
+        console.error('[WriteRead] Failed:', response.status);
+      }
+    } catch (err) {
+      console.error('[WriteRead] Error:', err);
+    }
+  }
+
   private async readAndBroadcast(): Promise<void> {
     try {
-      console.log('[Read] Fetching /read...');
       const response = await this.containerFetch('http://container:8080/read', { 
         method: 'GET',
         signal: AbortSignal.timeout(2000),
       });
       
-      console.log('[Read] Response status:', response.status);
-      
       if (response.ok) {
         const text = await response.text();
-        console.log('[Read] Response length:', text.length, 'bytes');
-        
         if (text.trim()) {
           const lines = text.split('\n').filter((l: string) => l.trim());
-          console.log('[Read] Got', lines.length, 'message(s)');
-          
           for (const line of lines) {
             const msg = parseMessage(line);
             if (msg) {
-              console.log('[Read] Broadcasting type:', msg.type, 'data length:', getDataLength(msg));
               this.broadcastToWebSockets(msg);
               if (msg.type === 'exit') {
                 console.log('[Read] PTY exited with code:', msg.code);
               }
-            } else {
-              console.log('[Read] Failed to parse:', line.substring(0, 100));
             }
           }
-        } else {
-          console.log('[Read] Empty response');
         }
-      } else {
-        console.log('[Read] Non-OK status:', response.status);
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'TimeoutError') {
-        console.log('[Read] Timeout (no data)');
-      } else {
+      if (!(err instanceof DOMException && err.name === 'TimeoutError')) {
         console.error('[Read] Error:', err);
       }
     }
@@ -296,9 +309,8 @@ export class ContainerManager extends Container {
         break;
 
       case 'data':
-        await this.sendToContainer(msg);
-        await new Promise(r => setTimeout(r, 10));
-        await this.readAndBroadcast();
+        // Use combined write+read for lower latency
+        await this.writeAndRead(msg);
         break;
 
       case 'resize':

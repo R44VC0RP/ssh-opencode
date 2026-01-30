@@ -48,5 +48,5 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Version label to force new image digest
-LABEL version="2026.01.29.v5" \
-      description="PTY bridge with HTTP buffer + WebSocket streaming"
+LABEL version="2026.01.29.v7" \
+      description="PTY bridge with zero-wait writeread for minimum latency"

@@ -119,6 +119,7 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 		}
 
 		// SSH input → WebSocket (user keystrokes)
+		// Use a small buffer to coalesce rapid keystrokes
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -136,7 +137,7 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 						return
 					}
 
-					// Encode as base64 and send
+					// Send immediately - no buffering delay
 					encoded := base64.StdEncoding.EncodeToString(buf[:n])
 					msg := proxy.NewDataMessage(encoded)
 					data, _ := msg.Marshal()
