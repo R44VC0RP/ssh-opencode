@@ -96,7 +96,8 @@ func (s *PTYSession) Broadcast(msg Message) {
 	defer s.clientsMu.RUnlock()
 
 	for client := range s.clients {
-		client.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		// Use longer timeout for reliability - 5 seconds
+		client.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := client.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Printf("WebSocket write error: %v", err)
 		}
