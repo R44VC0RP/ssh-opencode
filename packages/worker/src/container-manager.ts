@@ -9,7 +9,7 @@ function getDataLength(msg: Message): number {
  * ContainerManager - Cloudflare Container-enabled Durable Object
  * 
  * Manages a single OpenCode container instance for a user session.
- * Uses fast HTTP polling (triggered by 1-second client pings) for responsive I/O.
+ * Uses WebSocket streaming to container for low-latency bidirectional I/O.
  */
 export class ContainerManager extends Container {
   defaultPort = 8080;
@@ -30,12 +30,17 @@ export class ContainerManager extends Container {
     lastActive: number;
   } | null = null;
 
+  // WebSocket connection to the container's PTY bridge
+  private containerWs: WebSocket | null = null;
+  private containerWsReady = false;
+
   override onStart(): void {
     console.log('[Container] Started for session:', this.ctx.id.toString());
   }
 
   override onStop(): void {
     console.log('[Container] Stopped for session:', this.ctx.id.toString());
+    this.closeContainerWs();
   }
 
   override onError(error: unknown): void {
@@ -47,6 +52,16 @@ export class ContainerManager extends Container {
     });
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(errorMsg); } catch {}
+    }
+  }
+
+  private closeContainerWs(): void {
+    if (this.containerWs) {
+      try {
+        this.containerWs.close();
+      } catch {}
+      this.containerWs = null;
+      this.containerWsReady = false;
     }
   }
 
@@ -64,6 +79,7 @@ export class ContainerManager extends Container {
         connections: this.ctx.getWebSockets().length,
         containerState: state,
         sessionState: this.sessionState,
+        containerWsReady: this.containerWsReady,
       });
     }
 
@@ -100,13 +116,14 @@ export class ContainerManager extends Container {
         await this.ensureContainerReady();
         server.send(JSON.stringify({ type: 'status', message: 'Initializing PTY...' }));
         
+        // Initialize PTY via HTTP (one-time setup)
         await this.initializePTY(cols, rows, repo);
-        server.send(JSON.stringify({ type: 'status', message: 'Ready!' }));
         
-        // Initial read with logging
-        console.log('[Init] Doing initial read...');
-        await this.readAndBroadcast();
-        console.log('[Init] Initial read complete');
+        // Establish WebSocket streaming connection to container
+        server.send(JSON.stringify({ type: 'status', message: 'Connecting stream...' }));
+        await this.connectContainerWebSocket(cols, rows, repo);
+        
+        server.send(JSON.stringify({ type: 'status', message: 'Ready!' }));
       } catch (err) {
         console.error('[Init] Failed:', err);
         try {
@@ -185,7 +202,95 @@ export class ContainerManager extends Container {
     }
   }
 
-  private async sendToContainer(msg: Message): Promise<void> {
+  /**
+   * Establish WebSocket connection to container's PTY bridge.
+   * This enables push-based output instead of polling.
+   */
+  private async connectContainerWebSocket(cols: number, rows: number, repo?: string): Promise<void> {
+    // Close any existing connection
+    this.closeContainerWs();
+
+    try {
+      console.log('[ContainerWS] Connecting to container WebSocket...');
+      
+      // Use containerFetch with WebSocket upgrade
+      const response = await this.containerFetch('http://container:8080/ws', {
+        headers: {
+          'Upgrade': 'websocket',
+        },
+      });
+
+      console.log('[ContainerWS] Got response, status:', response.status);
+      
+      // Check if we got a WebSocket back
+      const ws = (response as any).webSocket;
+      if (!ws) {
+        console.log('[ContainerWS] No WebSocket in response (status:', response.status, '), falling back to HTTP polling');
+        return;
+      }
+
+      ws.accept();
+      this.containerWs = ws;
+
+      // Send init message to container WebSocket
+      const initMsg: InitMessage = { type: 'init', cols, rows, repo };
+      ws.send(JSON.stringify(initMsg));
+
+      // Handle messages from container - forward to all clients
+      ws.addEventListener('message', (event: MessageEvent) => {
+        const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+        const msg = parseMessage(data);
+        
+        if (msg) {
+          // Forward to all connected client WebSockets
+          this.broadcastToWebSockets(msg);
+          
+          if (msg.type === 'exit') {
+            console.log('[ContainerWS] PTY exited with code:', msg.code);
+          }
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        console.log('[ContainerWS] Connection closed');
+        this.containerWs = null;
+        this.containerWsReady = false;
+      });
+
+      ws.addEventListener('error', (err: Event) => {
+        console.error('[ContainerWS] Error:', err);
+      });
+
+      this.containerWsReady = true;
+      console.log('[ContainerWS] Connected and ready - using WebSocket streaming!');
+
+    } catch (err) {
+      console.error('[ContainerWS] Failed to connect:', err);
+      // Fall back to HTTP polling if WebSocket fails
+      this.containerWs = null;
+      this.containerWsReady = false;
+    }
+  }
+
+  /**
+   * Send message to container - uses WebSocket if available, falls back to HTTP
+   */
+  private async sendToContainerWs(msg: Message): Promise<void> {
+    if (this.containerWs && this.containerWsReady) {
+      try {
+        this.containerWs.send(serializeMessage(msg));
+        return;
+      } catch (err) {
+        console.error('[ContainerWS] Send error, falling back to HTTP:', err);
+        this.containerWsReady = false;
+      }
+    }
+
+    // Fallback to HTTP
+    await this.sendToContainerHttp(msg);
+  }
+
+  private async sendToContainerHttp(msg: Message): Promise<void> {
     try {
       const response = await this.containerFetch('http://container:8080/write', {
         method: 'POST',
@@ -200,8 +305,8 @@ export class ContainerManager extends Container {
     }
   }
 
-  // Combined write + read for lower latency (single HTTP round-trip)
-  private async writeAndRead(msg: Message): Promise<void> {
+  // HTTP fallback: Combined write + read for lower latency (single HTTP round-trip)
+  private async writeAndReadHttp(msg: Message): Promise<void> {
     try {
       const response = await this.containerFetch('http://container:8080/writeread', {
         method: 'POST',
@@ -232,7 +337,8 @@ export class ContainerManager extends Container {
     }
   }
 
-  private async readAndBroadcast(): Promise<void> {
+  // HTTP fallback: Read and broadcast
+  private async readAndBroadcastHttp(): Promise<void> {
     try {
       const response = await this.containerFetch('http://container:8080/read', { 
         method: 'GET',
@@ -263,9 +369,6 @@ export class ContainerManager extends Container {
 
   private broadcastToWebSockets(msg: Message): void {
     const data = serializeMessage(msg);
-    const wsCount = this.ctx.getWebSockets().length;
-    console.log('[Broadcast] To', wsCount, 'client(s), data length:', data.length);
-    
     for (const ws of this.ctx.getWebSockets()) {
       try {
         ws.send(data);
@@ -299,22 +402,35 @@ export class ContainerManager extends Container {
       return;
     }
 
-    console.log('[WS] Received type:', msg.type);
-
     switch (msg.type) {
       case 'init':
         console.log('[WS] Init message');
         await this.ensureContainerReady();
-        await this.readAndBroadcast();
+        // Try to reconnect container WebSocket if needed
+        if (!this.containerWsReady) {
+          await this.connectContainerWebSocket(
+            this.sessionState?.cols || 80,
+            this.sessionState?.rows || 24,
+            this.sessionState?.repo
+          );
+        }
+        // Do initial read via HTTP (container WS may not have data yet)
+        await this.readAndBroadcastHttp();
         break;
 
       case 'data':
-        // Use combined write+read for lower latency
-        await this.writeAndRead(msg);
+        // Send to container via WebSocket (immediate) or HTTP fallback
+        if (this.containerWsReady && this.containerWs) {
+          // WebSocket: just send, output comes back via container WS message handler
+          await this.sendToContainerWs(msg);
+        } else {
+          // HTTP fallback: use combined write+read
+          await this.writeAndReadHttp(msg);
+        }
         break;
 
       case 'resize':
-        await this.sendToContainer(msg);
+        await this.sendToContainerWs(msg);
         if (this.sessionState) {
           this.sessionState.cols = msg.cols;
           this.sessionState.rows = msg.rows;
@@ -323,7 +439,11 @@ export class ContainerManager extends Container {
 
       case 'ping':
         ws.send(serializeMessage({ type: 'pong', timestamp: msg.timestamp }));
-        await this.readAndBroadcast();
+        // With WebSocket streaming, we don't need to poll on ping
+        // But if WS is not ready, do HTTP read as fallback
+        if (!this.containerWsReady) {
+          await this.readAndBroadcastHttp();
+        }
         break;
 
       case 'exit':
@@ -340,6 +460,11 @@ export class ContainerManager extends Container {
     
     if (this.sessionState) {
       await this.ctx.storage.put('sessionState', this.sessionState);
+    }
+    
+    // If no more clients, close container WebSocket
+    if (this.ctx.getWebSockets().length === 0) {
+      this.closeContainerWs();
     }
   }
 

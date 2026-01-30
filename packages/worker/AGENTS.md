@@ -1,6 +1,6 @@
 # WORKER
 
-Cloudflare Worker + Durable Object that manages container lifecycle for SSH sessions.
+Cloudflare Worker + Durable Object managing container lifecycle via WebSocket streaming.
 
 ## STRUCTURE
 
@@ -8,7 +8,7 @@ Cloudflare Worker + Durable Object that manages container lifecycle for SSH sess
 worker/
 ├── src/
 │   ├── index.ts              # Worker entry, WebSocket routing
-│   ├── container-manager.ts  # Container-enabled DO (extends @cloudflare/containers)
+│   ├── container-manager.ts  # Container DO with WebSocket to PTY bridge
 │   └── protocol.ts           # Message types (sync with ssh-relay + pty-bridge)
 ├── wrangler.jsonc            # CF config (NOT .toml)
 └── package.json
@@ -18,72 +18,65 @@ worker/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add endpoint | `src/index.ts` | `fetch()` handler routes |
-| Modify container lifecycle | `src/container-manager.ts` | Extends `Container` class |
-| Change protocol | `src/protocol.ts` | **Must sync** with `ssh-relay` and `pty-bridge` |
-| Add DO storage | `src/container-manager.ts` | `ctx.storage.put/get` |
-| Configure container | `wrangler.jsonc` | Instance type, R2 mounts |
+| Add endpoint | `src/index.ts` | `fetch()` routes |
+| Container lifecycle | `src/container-manager.ts` | Extends `Container` |
+| Change protocol | `src/protocol.ts` | **Must sync** with ssh-relay + pty-bridge |
+| DO storage | `src/container-manager.ts` | `ctx.storage.put/get` |
+| Configure container | `wrangler.jsonc` | Instance type, R2 |
 
 ## CONVENTIONS
 
-- **Session ID**: SSH key fingerprint from `X-Session-ID` header
+- **Session ID**: SSH fingerprint from `X-Session-ID` header
 - **DO naming**: `env.CONTAINER_MANAGER.idFromName(sessionId)`
-- **WebSocket hibernation**: Uses `ctx.acceptWebSocket()` API
-- **Ping-triggered reads**: Each client ping triggers `readAndBroadcast()`
-- **Type guards**: Use `getDataLength()` helper for `Message` union types
+- **WebSocket hibernation**: `ctx.acceptWebSocket()` API
+- **Container WebSocket**: `connectContainerWebSocket()` for push-based I/O
+- **HTTP fallback**: `writeAndReadHttp()` if WS unavailable
 
 ## CONTAINER API
 
 ```typescript
 export class ContainerManager extends Container {
-  defaultPort = 8080;           // PTY bridge port
-  sleepAfter = '30m';           // Idle timeout
-  enableInternet = true;        // For git clone, npm install
+  defaultPort = 8080;
+  sleepAfter = '30m';
+  enableInternet = true;
   
-  // Lifecycle hooks
-  onStart(): void { }
-  onStop(): void { }
-  onError(error: unknown): void { }
+  // WebSocket to container
+  private containerWs: WebSocket | null;
+  private containerWsReady = false;
 }
 ```
 
 Key methods:
-- `startAndWaitForPorts({ ports: [8080] })` - Start and wait for ready
-- `containerFetch('http://container:8080/endpoint')` - HTTP to container
-- `getState()` - Status (running, healthy, stopped)
-- `renewActivityTimeout()` - Reset sleep timer
+- `connectContainerWebSocket()` - WS to container for streaming
+- `containerFetch()` - HTTP fallback
+- `broadcastToWebSockets()` - Send to all clients
 
 ## ANTI-PATTERNS
 
 | Pattern | Reason |
 |---------|--------|
-| Changing protocol without updating ssh-relay/pty-bridge | Must stay in sync across 3 files |
-| Storing sensitive data in DO storage | Not encrypted |
-| Forgetting `renewActivityTimeout()` | Container sleeps unexpectedly |
-| Using `msg.data` without type guard | `data` only exists on `DataMessage` |
-| Using `lite` instance type | OOM - OpenCode needs ~600MB, use `basic` |
+| Protocol change without sync | Must update all 3 files |
+| Sensitive data in DO storage | Not encrypted |
+| Forget `renewActivityTimeout()` | Container sleeps |
+| `msg.data` without type guard | Only on `DataMessage` |
+| `lite` instance type | OOM - use `basic` |
 
 ## COMMANDS
 
 ```bash
 npm install
-npm run dev      # wrangler dev (local)
+npm run dev      # wrangler dev
 npm run deploy   # wrangler deploy
 
-# Secrets
 npx wrangler secret put AUTH_SECRET
-
-# R2 bucket
 npx wrangler r2 bucket create opencode-state
-
-# Logs
 npx wrangler tail --format=pretty
 ```
 
 ## NOTES
 
-- **Container image**: Built from `packages/container/Dockerfile`
-- **Instance type**: Must be `basic` (1GB) not `lite` (256MB)
-- **PTY communication**: HTTP polling via `/read`, POST to `/write`
-- **Verbose logging**: `[Tag]` prefixed logs throughout for debugging
-- **Status messages**: Sends `{ type: 'status' }` but type not in protocol.ts
+- **Container image**: Built from `../container/Dockerfile`
+- **Instance type**: `basic` (1GB) required
+- **PTY streaming**: WebSocket to `/ws` endpoint (push-based)
+- **HTTP fallback**: `/writeread` if WS fails
+- **Status messages**: Sends `{type:'status'}` but not in protocol.ts

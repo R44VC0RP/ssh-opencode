@@ -1,12 +1,12 @@
 # SSH-RELAY
 
-Go SSH server that accepts connections and proxies to Cloudflare Worker via WebSocket.
+Go SSH server proxying to Cloudflare Worker via WebSocket.
 
 ## STRUCTURE
 
 ```
 ssh-relay/
-├── cmd/relay/main.go           # Entry point, flags, ping interval (1s)
+├── cmd/relay/main.go           # Entry, flags, ping interval (100ms)
 └── internal/
     ├── auth/
     │   ├── handler.go          # SSH public key auth
@@ -24,24 +24,24 @@ ssh-relay/
 | Modify session flow | `internal/session/handler.go` | `Handler()` goroutines |
 | Change protocol | `internal/proxy/protocol.go` | **Must sync** with worker + pty-bridge |
 | Support new repo URLs | `internal/github/parser.go` | Regex patterns |
-| Change ping interval | `cmd/relay/main.go:85` | Currently 1 second |
+| Change ping interval | `cmd/relay/main.go:85` | Currently 100ms |
 
 ## CONVENTIONS
 
 - **CGO required**: SQLite needs `CGO_ENABLED=1`
 - **Module name**: `ssh-relay` (not path-based)
 - **Fingerprint context**: Auth stores `fingerprint` in `ssh.Context`
-- **Base64 encoding**: All PTY data base64 encoded in `data` field
-- **Status handling**: Has `MsgStatus` type for status messages
+- **Base64 encoding**: All PTY data base64 encoded
+- **Status handling**: Has `MsgStatus` type (worker doesn't define it)
 
 ## ANTI-PATTERNS
 
 | Pattern | Reason |
 |---------|--------|
-| Changing protocol without updating worker/pty-bridge | Must stay in sync across 3 files |
-| Storing secrets in registry.go | Use env vars only |
-| CGO_ENABLED=0 | SQLite won't work |
-| Ping interval >5s | UI becomes unresponsive |
+| Protocol change without sync | Must update all 3 files |
+| Secrets in registry.go | Use env vars |
+| CGO_ENABLED=0 | SQLite fails |
+| Ping interval >5s | UI unresponsive |
 
 ## COMMANDS
 
@@ -52,18 +52,14 @@ CGO_ENABLED=1 go build -o ssh-relay ./cmd/relay
 # Run
 ./ssh-relay --worker-url wss://your.workers.dev/ws --listen :2222
 
-# Docker (local)
-docker-compose up ssh-relay       # Uses local-proxy
-docker-compose --profile cf up ssh-relay-cf  # Uses real CF Worker
-
-# Docker (standalone)
+# Docker
 docker build -t ssh-relay .
 docker run --network host -e WORKER_URL=wss://... ssh-relay
 ```
 
 ## NOTES
 
-- **Host key generation**: Auto-generates ED25519 if missing (uses ssh-keygen)
-- **Auto-register**: `--auto-register=true` (default) accepts any first-time key
-- **Ping interval**: 1 second - triggers worker to poll container for output
-- **Session headers**: `X-Session-ID`, `X-Cols`, `X-Rows`, `X-Repo`
+- **Host key**: Auto-generates ED25519 if missing
+- **Auto-register**: `--auto-register=true` accepts first-time keys
+- **Ping interval**: 100ms - keepalive for WebSocket streaming
+- **Headers**: `X-Session-ID`, `X-Cols`, `X-Rows`, `X-Repo`

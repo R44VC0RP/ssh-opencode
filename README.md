@@ -120,7 +120,8 @@ ssh-opencode/
 ├── packages/
 │   ├── ssh-relay/      # Go SSH server (runs on VPS)
 │   ├── worker/         # Cloudflare Worker + Durable Object
-│   └── container/      # Docker image with PTY bridge
+│   ├── container/      # Docker image with PTY bridge
+│   └── local-proxy/    # Local dev: simulates CF Worker
 ├── scripts/
 │   ├── setup.sh        # Local dev setup
 │   ├── setup-vps.sh    # VPS provisioning
@@ -131,8 +132,9 @@ ssh-opencode/
 | Package | Description | Tech |
 |---------|-------------|------|
 | `ssh-relay` | Accepts SSH, proxies to Worker via WebSocket | Go, gliderlabs/ssh |
-| `worker` | Routes sessions, manages container lifecycle | TypeScript, Cloudflare Workers |
+| `worker` | Routes sessions, manages container lifecycle, WebSocket streaming | TypeScript, Cloudflare Workers |
 | `container` | Runs PTY bridge + OpenCode TUI | Go, Docker |
+| `local-proxy` | Local dev only: simulates CF Worker | Go |
 
 ## Configuration
 
@@ -147,7 +149,7 @@ ssh-opencode/
 | `SSH_LISTEN_ADDR` | Listen address | `:22` |
 | `AUTO_REGISTER` | Auto-register new SSH keys | `true` |
 
-**Cloudflare Worker** (via `wrangler.toml` or secrets):
+**Cloudflare Worker** (via `wrangler.jsonc` or secrets):
 
 | Variable | Description |
 |----------|-------------|
@@ -203,14 +205,13 @@ npm run dev  # Local wrangler dev server
 
 ## Status
 
-> **Note**: Cloudflare Containers is currently in [beta](https://developers.cloudflare.com/containers/). The container spawning code in `container-manager.ts` is a placeholder until the API stabilizes.
-
 - [x] SSH relay server
 - [x] Cloudflare Worker + Durable Object
 - [x] PTY bridge container image
-- [x] WebSocket protocol
+- [x] WebSocket protocol (relay↔worker↔container)
 - [x] VPS setup scripts
-- [ ] Container spawning (waiting for CF Containers API)
+- [x] Container spawning via CF Containers
+- [x] WebSocket streaming (low-latency I/O)
 - [ ] GitHub Actions CI/CD
 - [ ] Multi-user support
 
