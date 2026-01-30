@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gliderlabs/ssh"
@@ -22,6 +23,34 @@ type Config struct {
 	WorkerURL    string
 	AuthSecret   string
 	PingInterval time.Duration
+}
+
+// safeConn wraps a WebSocket connection with a mutex for safe concurrent writes
+type safeConn struct {
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	closed atomic.Bool
+}
+
+func (c *safeConn) WriteMessage(messageType int, data []byte) error {
+	if c.closed.Load() {
+		return websocket.ErrCloseSent
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed.Load() {
+		return websocket.ErrCloseSent
+	}
+	return c.conn.WriteMessage(messageType, data)
+}
+
+func (c *safeConn) ReadMessage() (int, []byte, error) {
+	return c.conn.ReadMessage()
+}
+
+func (c *safeConn) Close() error {
+	c.closed.Store(true)
+	return c.conn.Close()
 }
 
 // Handler creates an SSH session handler that proxies to Cloudflare Worker
@@ -73,7 +102,7 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 30 * time.Second,
 		}
-		conn, resp, err := dialer.Dial(cfg.WorkerURL, headers)
+		rawConn, resp, err := dialer.Dial(cfg.WorkerURL, headers)
 		if err != nil {
 			log.Printf("Session %s: WebSocket dial error: %v", fingerprint[:16], err)
 			if resp != nil {
@@ -83,6 +112,7 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 			s.Exit(1)
 			return
 		}
+		conn := &safeConn{conn: rawConn}
 		defer conn.Close()
 
 		// Send init message
@@ -112,14 +142,16 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 					case <-ticker.C:
 						pingMsg := proxy.NewPingMessage(time.Now().UnixMilli())
 						data, _ := pingMsg.Marshal()
-						conn.WriteMessage(websocket.TextMessage, data)
+						if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+							// Connection closed, exit quietly
+							return
+						}
 					}
 				}
 			}()
 		}
 
 		// SSH input → WebSocket (user keystrokes)
-		// Use a small buffer to coalesce rapid keystrokes
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -142,7 +174,7 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 					msg := proxy.NewDataMessage(encoded)
 					data, _ := msg.Marshal()
 					if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-						log.Printf("Session %s: WS write error: %v", fingerprint[:16], err)
+						// Connection closed, exit quietly
 						return
 					}
 				}
@@ -213,7 +245,10 @@ func Handler(cfg Config, registry *auth.Registry) ssh.Handler {
 					}
 					msg := proxy.NewResizeMessage(win.Width, win.Height)
 					data, _ := msg.Marshal()
-					conn.WriteMessage(websocket.TextMessage, data)
+					if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+						// Connection closed, exit quietly
+						return
+					}
 				}
 			}
 		}()
